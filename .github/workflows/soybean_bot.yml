@@ -2,10 +2,10 @@ name: Soybean Monitor Bot
 
 on:
   schedule:
-    # 每天台灣時間早上 08:00 (UTC 00:00) 執行
-    - cron: '0 0 * * *'
+    # 每天台灣時間早上 07:30 (UTC 23:30) 執行
+    - cron: '30 23 * * *'
   workflow_dispatch: # 允許手動執行
-
+  
 jobs:
   build:
     runs-on: ubuntu-latest
