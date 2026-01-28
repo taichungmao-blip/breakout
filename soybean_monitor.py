@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import requests
 import os
+import platform # 新增：用於偵測作業系統
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -78,7 +79,7 @@ def send_discord_notify(msg, img_path=None):
         print(f"❌ Discord error: {e}")
 
 # ==========================================
-# 3. 核心邏輯 (含剪刀差)
+# 3. 核心邏輯 (含圖表字型修正)
 # ==========================================
 
 def get_data():
@@ -95,36 +96,33 @@ def analyze_stock(stock_code, stock_data, comm_data, comm_name, rev_yoy, prev_st
     s_pct = ((stock_data.iloc[-1] - prev_stock) / prev_stock) * 100
     c_pct = ((comm_data.iloc[-1] - prev_comm) / prev_comm) * 100
     
-    # 2. 開口度 (Gap): 股價是否委屈?
+    # 2. 開口度 (Gap)
     norm_stock = (stock_data / stock_data.iloc[0]) * 100
     norm_comm = (comm_data / comm_data.iloc[0]) * 100
     gap = norm_stock.iloc[-1] - norm_comm.iloc[-1]
     
-    # 3. 剪刀差 (Spread): 獲利是否擴張? (營收成長 - 成本變動)
-    # 若營收+10%, 成本-5% -> Spread = 15 (極好)
+    # 3. 剪刀差 (Spread)
     spread = rev_yoy - c_pct
     
     # --- 綜合策略 ---
     signal = "⚖️ 觀望"
     icon = "⚪"
     
-    if spread > 10: # 獲利暴力擴張期
+    if spread > 10:
         if gap < -5:
             signal = "💎 **鑽石買點** (獲利爆發+股價低估)"
             icon = "💎"
         else:
             signal = "🔥 **強勢成長** (獲利擴張中)"
             icon = "🔥"
-            
-    elif spread > 0: # 正向循環
+    elif spread > 0:
         if gap < -10:
             signal = "🎯 **黃金買點** (成本降+股價委屈)"
             icon = "🎯"
         else:
             signal = "✅ **穩健持有** (能夠轉嫁成本)"
             icon = "✅"
-            
-    else: # 負向循環 (Spread < 0)
+    else:
         if s_pct < -5:
             signal = "📉 **弱勢盤整** (基本面轉弱)"
             icon = "📉"
@@ -132,7 +130,6 @@ def analyze_stock(stock_code, stock_data, comm_data, comm_name, rev_yoy, prev_st
             signal = "⚠️ **獲利壓縮** (營收跟不上成本)"
             icon = "⚠️"
 
-    # 輸出格式
     name = WATCH_LIST[stock_code]['name']
     res = f"> {icon} **{stock_code.split('.')[0]} {name}** ({comm_name})\n"
     res += f"> 剪刀差 `{spread:+.1f}` (營收 `{rev_yoy:+.1f}%` - 原料 `{c_pct:+.1f}%`)\n"
@@ -140,7 +137,28 @@ def analyze_stock(stock_code, stock_data, comm_data, comm_name, rev_yoy, prev_st
     res += f"> 評級: {signal}\n"
     return res
 
+# 🔧 新增：設定中文字型功能
+def set_chinese_font():
+    """
+    根據作業系統自動設定 Matplotlib 的中文字型
+    """
+    system = platform.system()
+    if system == 'Windows':
+        # Windows 預設使用微軟正黑體
+        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei'] 
+    elif system == 'Darwin': 
+        # Mac OS 使用 Arial Unicode MS 或 Heiti TC
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Heiti TC']
+    else:
+        # Linux / Colab 環境通常需要手動安裝字型，這裡設定常見的免費字型
+        plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Droid Sans Fallback']
+    
+    # 讓負號正常顯示 (不要變成方框)
+    plt.rcParams['axes.unicode_minus'] = False
+
 def plot_dual_chart(df):
+    set_chinese_font() # ✅ 在繪圖前呼叫字型設定
+    
     plt.figure(figsize=(12, 10))
     plt.style.use('bmh')
     
@@ -152,7 +170,10 @@ def plot_dual_chart(df):
         ax1.plot(norm_c.index, norm_c, 'r--', lw=2, label='Corn Cost')
         for k,v in WATCH_LIST.items():
             if v["target"]=="CORN" and k in df.columns:
-                ax1.plot((df[k]/df[k].iloc[0])*100, label=v["name"])
+                # 修正標籤：加入代號 "1220 台榮"
+                label_str = f"{k.split('.')[0]} {v['name']}"
+                ax1.plot((df[k]/df[k].iloc[0])*100, label=label_str)
+                
     ax1.set_title(f"Corn Group (Starch) - {LOOKBACK_DAYS} Days"); ax1.legend(); ax1.grid(True)
 
     # 子圖2: 黃豆
@@ -163,7 +184,10 @@ def plot_dual_chart(df):
         ax2.plot(norm_s.index, norm_s, 'r--', lw=2, label='Soy Cost')
         for k,v in WATCH_LIST.items():
             if v["target"]=="SOY" and k in df.columns:
-                ax2.plot((df[k]/df[k].iloc[0])*100, label=v["name"])
+                # 修正標籤：加入代號 "1210 大成"
+                label_str = f"{k.split('.')[0]} {v['name']}"
+                ax2.plot((df[k]/df[k].iloc[0])*100, label=label_str)
+                
     ax2.set_title(f"Soybean Group (Feed/Oil) - {LOOKBACK_DAYS} Days"); ax2.legend(); ax2.grid(True)
     
     plt.tight_layout()
@@ -183,7 +207,7 @@ def main():
     img = plot_dual_chart(df)
     
     date = df.index[-1].strftime('%Y-%m-%d')
-    msg = f"**【食品股 剪刀差獲利模型 V6】**\n📅 `{date}`\n"
+    msg = f"**【食品股 剪刀差獲利模型 V6.1】**\n📅 `{date}`\n"
     msg += "指標說明：\n✂️ **剪刀差 (Spread)** = 營收成長 - 成本漲幅\n(數值越大代表毛利擴張能力越強)\n\n"
     
     prev_idx = -STRATEGY_WINDOW if len(df) > STRATEGY_WINDOW else 0
