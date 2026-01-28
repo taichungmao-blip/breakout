@@ -7,31 +7,52 @@ import os
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. 終極字型解決方案 (強制下載並指定路徑)
+# 1. 穩健型字型下載功能 (V6.4 修正)
 # ==========================================
 
 def get_chinese_font():
     """
-    直接下載並回傳字型物件，不依賴系統安裝
+    下載並回傳字型物件。若下載失敗，回傳 None (使用預設字型以免崩潰)
     """
-    font_name = "NotoSansTC-Regular.ttf"
-    # 使用 Google Fonts 的穩定連結
-    font_url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+    # 改用更穩定的 Noto Sans CJK TC (OpenType Format)
+    font_name = "NotoSansCJKtc-Regular.otf"
+    # 使用 raw.githubusercontent.com 直連，避免重導向問題
+    font_url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
     
-    # 1. 檢查檔案是否存在，不存在就下載
+    # 檢查是否已存在
     if not os.path.exists(font_name):
-        print(f"📥 正在下載中文字型檔 ({font_name})...")
+        print(f"📥 正在下載中文字型 ({font_name})...")
         try:
-            response = requests.get(font_url)
+            # 加入 User-Agent 避免被 GitHub 擋下
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(font_url, headers=headers, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"❌ 下載失敗 (Status: {response.status_code})，將使用預設字型。")
+                return None
+            
             with open(font_name, 'wb') as f:
                 f.write(response.content)
-            print("✅ 字型下載完成！")
+            
+            # 【關鍵修正】檢查檔案大小，避免下載到 404 網頁
+            file_size = os.path.getsize(font_name)
+            if file_size < 10000: # 小於 10KB 肯定是壞檔
+                print(f"❌ 下載檔案過小 ({file_size} bytes)，可能是錯誤頁面。已刪除壞檔。")
+                os.remove(font_name)
+                return None
+                
+            print("✅ 字型下載完成且驗證成功！")
         except Exception as e:
-            print(f"❌ 字型下載失敗，將無法顯示中文: {e}")
+            print(f"❌ 下載過程發生錯誤: {e}")
+            if os.path.exists(font_name): os.remove(font_name) # 清除壞檔
             return None
             
-    # 2. 直接建立字型物件 (Bypass 系統設定)
-    return fm.FontProperties(fname=font_name)
+    # 建立字型物件
+    try:
+        return fm.FontProperties(fname=font_name)
+    except Exception as e:
+        print(f"❌ 字型載入失敗: {e}")
+        return None
 
 # ==========================================
 # 2. 策略參數設定
@@ -67,7 +88,6 @@ def get_twse_revenue_data():
         if res.status_code == 200:
             data = res.json()
             rev_map = {}
-            # 精準鎖定「去年同月增減」
             if data:
                 keys = list(data[0].keys())
                 yoy_key = next((k for k in keys if "增減" in k and "去年" in k and "上月" not in k), None)
@@ -114,6 +134,8 @@ def send_discord_notify(msg, img_path=None):
 def analyze_stock(stock_code, stock_data, comm_data, comm_name, rev_yoy, prev_stock, prev_comm):
     s_pct = ((stock_data.iloc[-1] - prev_stock) / prev_stock) * 100
     c_pct = ((comm_data.iloc[-1] - prev_comm) / prev_comm) * 100
+    
+    # Gap: 股價正規化 - 原料正規化
     gap = (stock_data / stock_data.iloc[0] * 100).iloc[-1] - (comm_data / comm_data.iloc[0] * 100).iloc[-1]
     spread = rev_yoy - c_pct
     
@@ -139,11 +161,11 @@ def analyze_stock(stock_code, stock_data, comm_data, comm_name, rev_yoy, prev_st
     return res
 
 # ==========================================
-# 4. 繪圖核心 (強制套用字型物件)
+# 4. 繪圖核心 (安全模式)
 # ==========================================
 
 def plot_dual_chart(df):
-    # 取得字型物件 (關鍵！)
+    # 取得字型物件 (若失敗則為 None)
     my_font = get_chinese_font()
     
     plt.figure(figsize=(12, 12))
@@ -154,7 +176,10 @@ def plot_dual_chart(df):
     if COMMODITIES["CORN"]["ticker"] in df.columns:
         c_tick = COMMODITIES["CORN"]["ticker"]
         norm_c = (df[c_tick] / df[c_tick].iloc[0]) * 100
-        ax1.plot(norm_c.index, norm_c, 'r--', lw=3, label='原料: 玉米 (Corn)')
+        # 如果 my_font 是 None，就不傳入 fontproperties，系統會用預設字型 (避免崩潰)
+        label_kwargs = {"fontproperties": my_font} if my_font else {}
+        
+        ax1.plot(norm_c.index, norm_c, 'r--', lw=3, label='Corn (Cost)')
         
         for k, v in WATCH_LIST.items():
             if v["target"] == "CORN" and k in df.columns:
@@ -162,10 +187,15 @@ def plot_dual_chart(df):
                 label_str = f"{k.split('.')[0]} {v['name']}"
                 ax1.plot(norm_s.index, norm_s, lw=2, label=label_str)
                 
-    # 強制指定標題字型
-    ax1.set_title(f"A組: 澱粉與果糖 (對比玉米) - 近 {LOOKBACK_DAYS} 日走勢", fontproperties=my_font, fontsize=14)
-    # 強制指定圖例字型 (prop=my_font)
-    ax1.legend(loc="upper left", prop=my_font)
+    # 設定標題 (安全模式)
+    title_str = f"Group A: Starch (vs Corn) - {LOOKBACK_DAYS} Days"
+    if my_font:
+        ax1.set_title(f"A組: 澱粉與果糖 (對比玉米) - 近 {LOOKBACK_DAYS} 日走勢", fontproperties=my_font, fontsize=14)
+        ax1.legend(loc="upper left", prop=my_font)
+    else:
+        ax1.set_title(title_str, fontsize=14)
+        ax1.legend(loc="upper left")
+        
     ax1.grid(True)
 
     # --- 子圖2: 黃豆組 ---
@@ -173,7 +203,7 @@ def plot_dual_chart(df):
     if COMMODITIES["SOY"]["ticker"] in df.columns:
         s_tick = COMMODITIES["SOY"]["ticker"]
         norm_s = (df[s_tick] / df[s_tick].iloc[0]) * 100
-        ax2.plot(norm_s.index, norm_s, 'r--', lw=3, label='原料: 黃豆 (Soybean)')
+        ax2.plot(norm_s.index, norm_s, 'r--', lw=3, label='Soybean (Cost)')
         
         for k, v in WATCH_LIST.items():
             if v["target"] == "SOY" and k in df.columns:
@@ -181,14 +211,19 @@ def plot_dual_chart(df):
                 label_str = f"{k.split('.')[0]} {v['name']}"
                 ax2.plot(norm_stock.index, norm_stock, lw=2, label=label_str)
                 
-    # 強制指定標題字型
-    ax2.set_title(f"B組: 飼料與油脂 (對比黃豆) - 近 {LOOKBACK_DAYS} 日走勢", fontproperties=my_font, fontsize=14)
-    # 強制指定圖例字型
-    ax2.legend(loc="upper left", prop=my_font)
+    # 設定標題 (安全模式)
+    title_str_b = f"Group B: Feed & Oil (vs Soybean) - {LOOKBACK_DAYS} Days"
+    if my_font:
+        ax2.set_title(f"B組: 飼料與油脂 (對比黃豆) - 近 {LOOKBACK_DAYS} 日走勢", fontproperties=my_font, fontsize=14)
+        ax2.legend(loc="upper left", prop=my_font)
+    else:
+        ax2.set_title(title_str_b, fontsize=14)
+        ax2.legend(loc="upper left")
+        
     ax2.grid(True)
     
     plt.tight_layout()
-    path = "v6_3_chart.png"
+    path = "v6_4_chart.png"
     plt.savefig(path)
     plt.close()
     return path
@@ -198,7 +233,7 @@ def plot_dual_chart(df):
 # ==========================================
 
 def main():
-    print("🚀 啟動 V6.3 終極字型修正版...")
+    print("🚀 啟動 V6.4 穩定修復版...")
     df = get_data()
     if df.empty: return
 
@@ -206,7 +241,7 @@ def main():
     img = plot_dual_chart(df)
     
     date = df.index[-1].strftime('%Y-%m-%d')
-    msg = f"**【食品股 剪刀差獲利模型 V6.3】**\n📅 `{date}`\n"
+    msg = f"**【食品股 剪刀差獲利模型 V6.4】**\n📅 `{date}`\n"
     msg += "指標說明：\n✂️ **剪刀差 (Spread)** = 營收成長 - 成本漲幅\n(正值代表毛利擴張，台榮看玉米，其餘看黃豆)\n\n"
     
     prev_idx = -STRATEGY_WINDOW if len(df) > STRATEGY_WINDOW else 0
