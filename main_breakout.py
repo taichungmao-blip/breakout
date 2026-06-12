@@ -50,79 +50,90 @@ def find_breakout_stocks():
     tickers = list(stock_dict.keys())
     
     print(f"開始分析 {len(tickers)} 檔股票的歷史數據 (下載 3 個月資料)...")
-    # 策略只需要計算 20MA 跟過去 20 天的盤整，抓 3 個月(3mo)的資料綽綽有餘且速度較快
     data = yf.download(" ".join(tickers), period="3mo", group_by='ticker', threads=True, progress=False)
     
     matched_stocks = []
     tw_tz = pytz.timezone('Asia/Taipei')
     now = datetime.now(tw_tz)
     
-    # 日期格式
     today_str = now.strftime('%Y-%m-%d')
     today_slash_str = now.strftime('%Y/%m/%d')
     
     for ticker in tickers:
         try:
-            # 確保有收盤價與成交量資料
             df = data[ticker].dropna(subset=['Close', 'Volume']).copy()
-            if df.empty or len(df) < 30: 
+            # 確保資料量足夠計算 20MA 以及回溯前 20 天的盤整 (至少需要 45 天比較保險)
+            if df.empty or len(df) < 45: 
                 continue
             
             current_close = df['Close'].iloc[-1]
             current_vol = df['Volume'].iloc[-1]
             
-            # 條件 1：股價小於 20 元
+            # 條件 1：最新股價小於 20 元
             if current_close >= 20:
                 continue
                 
-            # 計算均線與均量
             df['MA5'] = df['Close'].rolling(window=5).mean()
             df['MA10'] = df['Close'].rolling(window=10).mean()
             df['MA20'] = df['Close'].rolling(window=20).mean()
             df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
             
-            # 確保均線計算完成 (略過開頭的 NaN)
             if pd.isna(df['MA20'].iloc[-1]):
                 continue
 
-            # 條件 2：前期盤整 (檢查倒數第23天到倒數第3天，共20天的振幅小於 15%)
-            past_20_high = df['High'].iloc[-23:-3].max()
-            past_20_low = df['Low'].iloc[-23:-3].min()
-            
-            if past_20_low == 0 or pd.isna(past_20_low):
-                continue
-                
-            consolidation_ratio = (past_20_high - past_20_low) / past_20_low
-            if consolidation_ratio >= 0.15:
-                continue
-
-            # 條件 3：放量突破 (今日成交量大於前一日的5日均量 2 倍以上) 且今日收盤價大於盤整區間高點
-            vol_ma5_prev = df['Vol_MA5'].iloc[-2]
-            if current_vol <= vol_ma5_prev * 2 or current_close <= past_20_high:
-                continue
-
-            # 條件 4：強勢上攻多頭排列 (5MA > 10MA > 20MA) 且 收盤價 > 5MA
+            # 條件 2：確保「當下」趨勢依然是強勢多頭 (5MA > 10MA > 20MA) 且 收盤價 > 5MA
             ma5 = df['MA5'].iloc[-1]
             ma10 = df['MA10'].iloc[-1]
             ma20 = df['MA20'].iloc[-1]
             
-            if (ma5 > ma10 > ma20) and (current_close > ma5):
-                clean_code = ticker.split('.')[0]
-                name = stock_dict[ticker]
-                yahoo_link = f"<https://tw.stock.yahoo.com/quote/{clean_code}/technical-analysis>"
-                matched_stocks.append(
-                    f"📈 **{clean_code} {name}** | {today_slash_str}\n"
-                    f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol)}`\n"
-                    f"🔗 {yahoo_link}"
-                )
+            if not ((ma5 > ma10 > ma20) and (current_close > ma5)):
+                continue
+
+            # 條件 3 & 4：檢查過去 5 天內 (包含今天) 是否發生過「盤整後放量突破」
+            breakout_occurred = False
+            
+            # 迴圈檢查倒數第 5 天到最後一天 (-5, -4, -3, -2, -1)
+            for i in range(-5, 0):
+                # 抓取「該日」的前 20 天作為盤整區間 (例如 i=-1 時，取 -21 到 -2)
+                past_20_high = df['High'].iloc[i-21 : i-1].max()
+                past_20_low = df['Low'].iloc[i-21 : i-1].min()
+                
+                if pd.isna(past_20_low) or past_20_low == 0:
+                    continue
+                    
+                # 計算該日之前的盤整振幅
+                consolidation_ratio = (past_20_high - past_20_low) / past_20_low
+                
+                # 如果該日之前的振幅符合盤整條件 (< 15%)
+                if consolidation_ratio < 0.15:
+                    day_vol = df['Volume'].iloc[i]
+                    day_close = df['Close'].iloc[i]
+                    prev_vol_ma5 = df['Vol_MA5'].iloc[i-1]
+                    
+                    # 檢查該日是否放量且突破盤整區間高點
+                    if (day_vol > prev_vol_ma5 * 2) and (day_close > past_20_high):
+                        breakout_occurred = True
+                        break # 只要近 5 天有一日符合突破條件，就達標並跳出迴圈
+            
+            # 如果過去 5 天都沒有發生突破，則跳過這檔股票
+            if not breakout_occurred:
+                continue
+
+            # 若全部條件符合，加入清單
+            clean_code = ticker.split('.')[0]
+            name = stock_dict[ticker]
+            yahoo_link = f"<https://tw.stock.yahoo.com/quote/{clean_code}/technical-analysis>"
+            matched_stocks.append(
+                f"📈 **{clean_code} {name}** | {today_slash_str}\n"
+                f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol)}`\n"
+                f"🔗 {yahoo_link}"
+            )
                 
         except Exception as e:
-            # yfinance 偶爾會有單筆資料解析錯誤，直接略過
             continue
 
-    # 組合 Discord 訊息
-    message = f"🎯 **台股 {today_str} 底部起漲突破策略清單**\n" + "="*30 + "\n"
-    message += "(條件：20元以下、盤整後放量突破、均線多頭排列)\n\n"
+    message = f"🎯 **台股 {today_str} 底部起漲策略清單**\n" + "="*30 + "\n"
+    message += "(條件：20元以下、近5日內曾放量突破、目前維持多頭排列)\n\n"
     if matched_stocks:
         message += "\n\n".join(matched_stocks)
     else:
