@@ -1,4 +1,5 @@
+requests
 yfinance
 pandas
-matplotlib
-requests
+pytz
+urllib3
