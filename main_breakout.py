@@ -112,7 +112,7 @@ def find_breakout_stocks():
                 yahoo_link = f"<https://tw.stock.yahoo.com/quote/{clean_code}/technical-analysis>"
                 matched_stocks.append(
                     f"📈 **{clean_code} {name}** | {today_slash_str}\n"
-                    f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol)}`\n"
+                    f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol / 1000)}` 張\n"
                     f"🔗 {yahoo_link}"
                 )
                 
