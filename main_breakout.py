@@ -109,10 +109,24 @@ def find_breakout_stocks():
             if (ma5 > ma10 > ma20) and (current_close > ma5):
                 clean_code = ticker.split('.')[0]
                 name = stock_dict[ticker]
+                
+                # --- 取得本益比 ---
+                try:
+                    stock_info = yf.Ticker(ticker).info
+                    pe = stock_info.get('trailingPE', 'N/A')
+                    # 確保數值格式化為小數點後兩位
+                    if isinstance(pe, (int, float)):
+                        pe_str = f"{pe:.2f}"
+                    else:
+                        pe_str = str(pe)
+                except Exception:
+                    pe_str = "N/A"
+                # -----------------
+
                 yahoo_link = f"<https://tw.stock.yahoo.com/quote/{clean_code}/technical-analysis>"
                 matched_stocks.append(
                     f"📈 **{clean_code} {name}** | {today_slash_str}\n"
-                    f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol / 1000)}` 張\n"
+                    f"收盤價: `{current_close:.2f}` | 成交量: `{int(current_vol / 1000)}` 張 | 本益比: `{pe_str}`\n"
                     f"🔗 {yahoo_link}"
                 )
                 
