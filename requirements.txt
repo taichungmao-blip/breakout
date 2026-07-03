@@ -3,3 +3,4 @@ yfinance
 pandas
 pytz
 urllib3
+beautifulsoup4
