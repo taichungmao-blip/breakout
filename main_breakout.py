@@ -5,6 +5,7 @@ import pandas as pd
 import urllib3
 from datetime import datetime
 import pytz
+from bs4 import BeautifulSoup  # 新增：用於解析網頁 HTML
 
 # 關閉略過 SSL 驗證警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -34,6 +35,30 @@ def get_stock_list():
         print(f"取得清單失敗: {e}")
     return stock_dict
 
+def get_yahoo_pe(stock_code):
+    """直接爬取台灣奇摩股市網頁上的本益比"""
+    url = f"https://tw.stock.yahoo.com/quote/{stock_code}/technical-analysis"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=5, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # 根據截圖中的特徵：尋找包含「本益比 (同業平均)」的 span
+            pe_label = soup.find("span", string=lambda t: t and "本益比" in t)
+            if pe_label:
+                # 找到它的兄弟節點或父節點底下的數值 span (字體為 Fz(16px))
+                pe_value_span = pe_label.find_parent().find("span", class_=lambda c: c and "Fz(16px)" in c)
+                if pe_value_span:
+                    # 取得內容 (例如 "23.40 (22.95)")，並只切出前面的本益比數字
+                    full_text = pe_value_span.get_text(strip=True)
+                    pe_num = full_text.split("(")[0].strip()
+                    return pe_num
+    except Exception as e:
+        print(f"爬取 {stock_code} 本益比失敗: {e}")
+    return "N/A"
+
 def send_discord_message(content):
     """發送至 Discord"""
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -50,20 +75,17 @@ def find_breakout_stocks():
     tickers = list(stock_dict.keys())
     
     print(f"開始分析 {len(tickers)} 檔股票的歷史數據 (下載 3 個月資料)...")
-    # 策略只需要計算 20MA 跟過去 20 天的盤整，抓 3 個月(3mo)的資料綽綽有餘且速度較快
     data = yf.download(" ".join(tickers), period="3mo", group_by='ticker', threads=True, progress=False)
     
     matched_stocks = []
     tw_tz = pytz.timezone('Asia/Taipei')
     now = datetime.now(tw_tz)
     
-    # 日期格式
     today_str = now.strftime('%Y-%m-%d')
     today_slash_str = now.strftime('%Y/%m/%d')
     
     for ticker in tickers:
         try:
-            # 確保有收盤價與成交量資料
             df = data[ticker].dropna(subset=['Close', 'Volume']).copy()
             if df.empty or len(df) < 30: 
                 continue
@@ -81,11 +103,10 @@ def find_breakout_stocks():
             df['MA20'] = df['Close'].rolling(window=20).mean()
             df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
             
-            # 確保均線計算完成 (略過開頭的 NaN)
             if pd.isna(df['MA20'].iloc[-1]):
                 continue
 
-            # 條件 2：前期盤整 (檢查倒數第23天到倒數第3天，共20天的振幅小於 15%)
+            # 條件 2：前期盤整
             past_20_high = df['High'].iloc[-23:-3].max()
             past_20_low = df['Low'].iloc[-23:-3].min()
             
@@ -96,12 +117,12 @@ def find_breakout_stocks():
             if consolidation_ratio >= 0.15:
                 continue
 
-            # 條件 3：放量突破 (今日成交量大於前一日的5日均量 2 倍以上) 且今日收盤價大於盤整區間高點
+            # 條件 3：放量突破
             vol_ma5_prev = df['Vol_MA5'].iloc[-2]
             if current_vol <= vol_ma5_prev * 2 or current_close <= past_20_high:
                 continue
 
-            # 條件 4：強勢上攻多頭排列 (5MA > 10MA > 20MA) 且 收盤價 > 5MA
+            # 條件 4：強勢上攻多頭排列
             ma5 = df['MA5'].iloc[-1]
             ma10 = df['MA10'].iloc[-1]
             ma20 = df['MA20'].iloc[-1]
@@ -110,18 +131,9 @@ def find_breakout_stocks():
                 clean_code = ticker.split('.')[0]
                 name = stock_dict[ticker]
                 
-                # --- 取得本益比 ---
-                try:
-                    stock_info = yf.Ticker(ticker).info
-                    pe = stock_info.get('trailingPE', 'N/A')
-                    # 確保數值格式化為小數點後兩位
-                    if isinstance(pe, (int, float)):
-                        pe_str = f"{pe:.2f}"
-                    else:
-                        pe_str = str(pe)
-                except Exception:
-                    pe_str = "N/A"
-                # -----------------
+                # --- 改為直接爬取網頁網頁上的本益比 ---
+                pe_str = get_yahoo_pe(clean_code)
+                # -----------------------------------
 
                 yahoo_link = f"<https://tw.stock.yahoo.com/quote/{clean_code}/technical-analysis>"
                 matched_stocks.append(
@@ -131,7 +143,6 @@ def find_breakout_stocks():
                 )
                 
         except Exception as e:
-            # yfinance 偶爾會有單筆資料解析錯誤，直接略過
             continue
 
     # 組合 Discord 訊息
