@@ -4,7 +4,7 @@ on:
   schedule:
     # UTC 時間 06:30 對應台灣時間 (UTC+8) 的 14:30
     # 每週一到週五執行
-    - cron: '30 5 * * 1-5'
+    - cron: '40 5 * * 1-5'
   workflow_dispatch: # 允許您在 GitHub 網頁上手動點擊執行
 
 jobs:
